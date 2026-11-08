@@ -303,8 +303,7 @@ class Monitor:
         for attempt in range(1, 4):
             try:
                 log(f"Загружаем {TARGET_URL} (попытка {attempt}/3)...")
-                self.page.goto(TARGET_URL, wait_until="commit", timeout=45000)
-                self.page.wait_for_load_state("domcontentloaded", timeout=45000)
+                self.page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=45000)
                 break
             except Exception as e:
                 log(f"Предупреждение при загрузке страницы: {e}")
@@ -312,57 +311,115 @@ class Monitor:
                     raise
                 time.sleep(3)
 
-        self.page.wait_for_timeout(5000)
+        self.page.wait_for_timeout(4000)
         if self.is_login_page():
             raise PermissionError("login")
 
-        # ШАГ 1: На стартовом экране нажимаем на карточку завода 'АЛМАТЫ'
-        log("Шаг 1: Ищем и нажимаем на карточку завода 'АЛМАТЫ'...")
-        almaty_card = self.page.locator(".render-col:has-text('АЛМАТЫ'), .ibo-card:has-text('АЛМАТЫ'), div:has-text('АЛМАТЫ')").filter(has_text="АЛМАТЫ").first
+        # ШАГ 1: Нажимаем кнопку 'АЛМАТЫ' в верхнем тулбаре
+        log("Шаг 1: Ищем и нажимаем на 'АЛМАТЫ' в верхней панели заводов...")
+        almaty_clicked = False
         try:
-            almaty_card.wait_for(timeout=20000)
-            almaty_card.scroll_into_view_if_needed()
-            self.page.wait_for_timeout(1000)
-            almaty_card.click()
-            log("Кликнули на карточку 'АЛМАТЫ'.")
-        except Exception as e:
-            log(f"Locator клик по карточке 'АЛМАТЫ' не удался: {e}, пробуем JS...")
-            self.page.evaluate("""() => {
-                const els = Array.from(document.querySelectorAll('*'));
-                const card = els.find(e => (e.innerText || '').trim() === 'АЛМАТЫ' || (e.innerText || '').includes('АЛМАТЫ'));
-                if (card) card.click();
+            coords = self.page.evaluate("""() => {
+                const all = Array.from(document.querySelectorAll('*'));
+                const btn = all.find(e => {
+                    const t = (e.innerText || '').trim();
+                    const r = e.getBoundingClientRect();
+                    return t === 'АЛМАТЫ' && r.top >= 0 && r.top < 80 && r.width > 20 && r.height > 10;
+                });
+                if (btn) {
+                    btn.click();
+                    const r = btn.getBoundingClientRect();
+                    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                }
+                return null;
             }""")
+            if coords:
+                self.page.mouse.click(coords["x"], coords["y"])
+                almaty_clicked = True
+                log(f"Кликнули на 'АЛМАТЫ' в тулбаре по координатам ({coords['x']}, {coords['y']})")
+        except Exception as e:
+            log(f"Ошибка клика по 'АЛМАТЫ' в тулбаре: {e}")
 
-        # ШАГ 2: Ждем перехода на экран завода Алматы (где появляется зеленый блок '1 линия')
-        log("Шаг 2: Ожидаем экрана завода Алматы и блока '1 линия'...")
+        # Если не нашли в тулбаре через координаты, пробуем studio.gotoIbo на страницу завода Алматы
+        if not almaty_clicked:
+            log("Пробуем переход на завод Алматы через studio.gotoIbo...")
+            try:
+                self.page.evaluate("""() => {
+                    if (window.studio && window.studio.gotoIbo) {
+                        window.studio.gotoIbo({
+                            iboId: '52273723-fd3f-4c30-83da-a0f2763522bc',
+                            mode: 'gridView',
+                            viewId: 'a26792f5-d534-4c6c-a647-f75d66fc0049',
+                            params: { workcenterId: '1261cb69-ea71-402d-b8ca-817a9d0dcd77' }
+                        });
+                    }
+                }""")
+            except Exception as e:
+                log(f"gotoIbo завода Алматы: {e}")
+
+        # Ждем отображения экрана завода Алматы
+        log("Ожидаем загрузки экрана 'ВСЕ ЗАВОДЫ / АЛМАТЫ'...")
         self.page.wait_for_timeout(4000)
 
-        # ШАГ 3: Нажимаем на зеленый блок '1 линия' слева
-        log("Шаг 3: Нажимаем на блок '1 линия'...")
+        # ШАГ 2: Нажимаем на зеленый блок '1 линия' слева
+        log("Шаг 2: Ищем и нажимаем на зеленый блок '1 линия' слева...")
+        line_clicked = False
         try:
-            line_elem = self.page.get_by_text("линия", exact=False).first
-            line_elem.wait_for(timeout=25000)
-            line_elem.scroll_into_view_if_needed()
-            self.page.wait_for_timeout(1000)
-            line_elem.click()
-            log("Успешно кликнули на '1 линия'!")
-        except Exception as e:
-            log(f"Клик по '1 линия' через get_by_text: {e}, пробуем JS...")
-            self.page.evaluate("""() => {
-                const els = Array.from(document.querySelectorAll('*'));
-                const btn = els.find(e => (e.innerText || '').includes('линия'));
-                if (btn) btn.click();
+            line_coords = self.page.evaluate("""() => {
+                const all = Array.from(document.querySelectorAll('*'));
+                const matches = all.filter(e => {
+                    const t = (e.innerText || '').trim();
+                    const r = e.getBoundingClientRect();
+                    const hasText = (t === '1\\nлиния' || t === '1 линия' || t === 'линия' || (t.includes('1') && t.includes('линия') && t.length < 20));
+                    const onLeft = r.left >= 0 && r.left < 160;
+                    const inMiddleY = r.top > 60 && r.top < 650;
+                    const hasSize = r.width > 20 && r.height > 20;
+                    return hasText && onLeft && inMiddleY && hasSize;
+                });
+                if (matches.length > 0) {
+                    const target = matches[0];
+                    target.click();
+                    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                    const r = target.getBoundingClientRect();
+                    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                }
+                return null;
             }""")
+            if line_coords:
+                self.page.mouse.click(line_coords["x"], line_coords["y"])
+                line_clicked = True
+                log(f"Кликнули на зеленый блок '1 линия' по координатам ({line_coords['x']}, {line_coords['y']})")
+        except Exception as e:
+            log(f"Ошибка клика по '1 линия': {e}")
 
-        # ШАГ 4: Ждем отображения детального экрана 'ЛИНИИ ЗАВОДА' / 'СОБЫТИЯ ЗА СМЕНУ'
-        log("Шаг 4: Ожидаем загрузки детального экрана мониторинга линии...")
+        # Дополнительно: вызываем прямой gotoIbo детального экрана линии Алматы
+        log("Вызываем gotoIbo для детального экрана линии Алматы...")
         try:
-            self.page.locator("text=ЛИНИИ ЗАВОДА, text=СОБЫТИЯ ЗА СМЕНУ").first.wait_for(timeout=25000)
+            self.page.evaluate("""() => {
+                if (window.studio && window.studio.gotoIbo) {
+                    window.studio.gotoIbo({
+                        iboId: 'eba1ffb4-f2b1-451a-835e-446af19f93f8',
+                        viewId: '97c00ac7-f407-4150-8b3b-991bda19c595',
+                        mode: 'gridView',
+                        params: {
+                            enterprise: '1261cb69-ea71-402d-b8ca-817a9d0dcd77',
+                            workcenterId: 'c7d931c6-e645-46b0-941b-7fda5976b782'
+                        }
+                    }, 'self');
+                }
+            }""")
+        except Exception as e:
+            log(f"gotoIbo детального экрана: {e}")
+
+        # ШАГ 3: Ждем загрузки детального экрана мониторинга линии (СОБЫТИЯ ЗА СМЕНУ)
+        log("Шаг 3: Ожидаем загрузки детального экрана 'ЛИНИИ ЗАВОДА' / 'СОБЫТИЯ ЗА СМЕНУ'...")
+        try:
+            self.page.locator("text=СОБЫТИЯ ЗА СМЕНУ, text=ЛИНИИ ЗАВОДА").first.wait_for(timeout=25000)
             log("Экран 'ЛИНИИ ЗАВОДА' успешно загружен!")
         except Exception:
-            log("Предупреждение: таймер ожидания экрана истек, делаем скриншот текущего состояния.")
+            log("Предупреждение: таймер ожидания экрана истек, фиксируем текущий экран.")
 
-        # Даем 6 секунд дорисоваться всем таблицам и параметрам
+        # Даем 6 секунд дорисоваться всем таблицам, графикам и статусам
         self.page.wait_for_timeout(6000)
 
     def take_screenshot(self) -> str:
