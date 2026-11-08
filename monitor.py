@@ -305,74 +305,66 @@ class Monitor:
         if self.is_login_page():
             raise PermissionError("login")
 
-        # Ищем карточку завода 'Алматы' или кнопку в верхнем меню
-        log(f"Ищем переход на завод '{FACTORY_NAME}'...")
-        almaty_clicked = False
-
-        # 1. Пробуем кликнуть по карточке или кнопке Алматы
-        selectors = [
-            f".render-col:has-text('{FACTORY_NAME}')",
-            f".ibo-card:has-text('{FACTORY_NAME}')",
-            f"button:has-text('{FACTORY_NAME}')",
-            f".ant-btn:has-text('{FACTORY_NAME}')",
-            f"[role='button']:has-text('{FACTORY_NAME}')",
-            f"text={FACTORY_NAME}",
-        ]
-        for sel in selectors:
-            loc = self.page.locator(sel)
-            if loc.count() > 0:
-                try:
-                    log(f"Кликаем по селектору: {sel}")
-                    loc.first.click(timeout=10000)
-                    almaty_clicked = True
-                    break
-                except Exception as e:
-                    log(f"Не удалось кликнуть по {sel}: {e}")
-
-        # 2. Если клик через селекторы не сработал, вызываем прямой JS gotoIbo
-        if not almaty_clicked or self.page.url == TARGET_URL:
-            try:
-                log("Пробуем переход через JS gotoIbo...")
-                self.page.evaluate("""() => {
-                    if (window.studio && window.studio.gotoIbo) {
-                        window.studio.gotoIbo({
-                            iboId: '52273723-fd3f-4c30-83da-a0f2763522bc',
-                            mode: 'gridView',
-                            viewId: 'a26792f5-d534-4c6c-a647-f75d66fc0049',
-                            params: { workcenterId: '1261cb69-ea71-402d-b8ca-817a9d0dcd77' }
-                        });
-                    }
-                }""")
-            except Exception as e:
-                log(f"JS gotoIbo исключение: {e}")
-
-        # Ждем появления кнопки/блока линии (например '1 линия') на экране завода
-        log("Ожидаем появления блока '1 линия'...")
+        log("Переходим на экран мониторинга заводов...")
         try:
-            line_btn = self.page.get_by_text("линия", exact=False).first
-            line_btn.wait_for(timeout=20000)
-            self.page.wait_for_timeout(2000)
-            log("Нажимаем на '1 линия' для входа в детальный мониторинг...")
-            line_btn.click()
+            self.page.evaluate("""() => {
+                if (window.studio && window.studio.gotoIbo) {
+                    window.studio.gotoIbo({
+                        iboId: '52273723-fd3f-4c30-83da-a0f2763522bc',
+                        mode: 'gridView',
+                        viewId: 'a26792f5-d534-4c6c-a647-f75d66fc0049',
+                        params: { workcenterId: '1261cb69-ea71-402d-b8ca-817a9d0dcd77' }
+                    });
+                }
+            }""")
         except Exception as e:
-            log(f"Предупреждение при клике на '1 линия': {e}")
+            log(f"JS gotoIbo ошибка: {e}")
+
+        self.page.wait_for_timeout(4000)
+
+        # 1. Обязательно переключаем верхнюю кнопку на АЛМАТЫ
+        log("Ищем и нажимаем кнопку 'АЛМАТЫ' в верхней панели заводов...")
+        top_almaty = self.page.locator(".aip-button-list .ant-btn:has-text('АЛМАТЫ'), button:has-text('АЛМАТЫ'), .ant-btn:has-text('АЛМАТЫ')").first
+        try:
+            top_almaty.wait_for(timeout=15000)
+            top_almaty.click()
+            log("Нажали 'АЛМАТЫ' в верхней панели.")
+            self.page.wait_for_timeout(3000)
+        except Exception as e:
+            log(f"Поиск верхней кнопки 'АЛМАТЫ': {e}")
             try:
                 self.page.evaluate("""() => {
-                    const targets = Array.from(document.querySelectorAll('*'));
-                    const el = targets.find(e => (e.innerText || '').toLowerCase().includes('линия'));
-                    if (el) el.click();
+                    const btns = Array.from(document.querySelectorAll('.aip-button-list button, button, .ant-btn'));
+                    const btn = btns.find(b => (b.innerText || '').trim().toUpperCase() === 'АЛМАТЫ');
+                    if (btn) btn.click();
                 }""")
-            except Exception as js_err:
-                log(f"JS клик ошибка: {js_err}")
+            except Exception:
+                pass
 
-        # Ждем загрузки детального мониторинга (хлебные крошки 'ЛИНИИ ЗАВОДА' или 'СОБЫТИЯ ЗА СМЕНУ')
-        log("Ожидаем отображения детального экрана 'ЛИНИИ ЗАВОДА' / 'СОБЫТИЯ ЗА СМЕНУ'...")
+        # 2. Если мы на экране завода и виден зеленый блок '1 линия', нажимаем на него
+        log("Проверяем наличие блока '1 линия' для входа в мониторинг линий...")
         try:
-            self.page.locator(".render-col:has-text('СОБЫТИЯ ЗА СМЕНУ'), div:has-text('СОБЫТИЯ ЗА СМЕНУ')").first.wait_for(timeout=35000)
-        except Exception:
-            log("Предупреждение: таймер ожидания 'СОБЫТИЯ ЗА СМЕНУ' истек, продолжаем...")
+            line_btn = self.page.locator(".render-col:has-text('линия'), div:has-text('линия')").first
+            if line_btn.is_visible():
+                log("Нажимаем на '1 линия'...")
+                line_btn.click()
+                self.page.wait_for_timeout(3000)
+        except Exception as e:
+            log(f"Клик по '1 линия': {e}")
 
-        # Даем 6 секунд дорисоваться всем таблицам, графикам и статусам
+        # 3. Убеждаемся, что в верхней панели выбран именно АЛМАТЫ
+        try:
+            self.page.evaluate("""() => {
+                const btns = Array.from(document.querySelectorAll('.aip-button-list button, button, .ant-btn'));
+                const btn = btns.find(b => (b.innerText || '').trim().toUpperCase() === 'АЛМАТЫ');
+                if (btn) btn.click();
+            }""")
+            self.page.wait_for_timeout(2000)
+        except Exception:
+            pass
+
+        # Ожидаем отрисовки экрана линий завода Алматы
+        log("Ожидаем загрузки графиков и параметров линии Алматы...")
         self.page.wait_for_timeout(6000)
 
     def take_screenshot(self) -> str:
@@ -515,7 +507,7 @@ def main():
             try:
                 tg("sendChatAction", data={"chat_id": chat_id, "action": "upload_photo"})
                 st = refresh_and_detect()
-                send_photo(mon.take_screenshot(), status_caption(st, f"📊 <b>Линия {FACTORY_NAME}</b>"), chat_id)
+                send_photo(mon.take_screenshot(), f"📊 <b>Линия {FACTORY_NAME}</b> ({now_local():%d.%m.%Y %H:%M})", chat_id)
             except PermissionError:
                 send_text("⚠️ Сессия MES истекла — нужно обновить куки (секрет AUTH_STATE_JSON).", chat_id)
                 raise
@@ -594,9 +586,9 @@ def run_once_status():
             st = mon.detect_status()
             log(f"Статус определен: {st}")
             photo = mon.take_screenshot()
-            caption = status_caption(st, f"📊 <b>Линия {FACTORY_NAME}</b>")
+            caption = f"📊 <b>Линия {FACTORY_NAME}</b> ({now_local():%d.%m.%Y %H:%M})"
             send_photo(photo, caption)
-            log("Скриншот и статус успешно отправлены в Telegram.")
+            log("Скриншот успешно отправлен в Telegram.")
         except PermissionError:
             send_text("⚠️ <b>Сессия MES истекла.</b> Пожалуйста, обновите секрет AUTH_STATE_JSON.")
             sys.exit(1)
