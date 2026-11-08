@@ -1,20 +1,27 @@
-name: MES Almaty Line Monitor
+name: MES Almaty Line Status
 
 on:
-  # Запуск каждый час. Один запуск работает ~5ч45м; благодаря concurrency
-  # следующий запуск стоит в очереди и стартует сразу после окончания предыдущего.
-  schedule:
-    - cron: '0 * * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Режим работы'
+        required: false
+        default: 'status'
+        type: choice
+        options:
+          - status
+          - daemon
+  repository_dispatch:
+    types: [status, check]
 
 concurrency:
   group: mes-almaty-monitor
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  monitor:
+  check-status:
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    timeout-minutes: 10
     env:
       GH_PAT: ${{ secrets.GH_PAT }}
 
@@ -33,7 +40,7 @@ jobs:
           pip install -r requirements.txt
           playwright install --with-deps chromium
 
-      # Продление сессии MES и сохранение новых куки в секрет (если задан GH_PAT)
+      # Автоматическое продление токена сессии MES (сохраняет в secret AUTH_STATE_JSON)
       - name: Refresh MES session cookies
         if: env.GH_PAT != ''
         env:
@@ -46,14 +53,12 @@ jobs:
             rm -f refreshed_auth.json
           fi
 
-      - name: Run monitor (check every 10 min + Telegram bot)
+      - name: Fetch Almaty status and send screenshot
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           AUTH_STATE_JSON: ${{ secrets.AUTH_STATE_JSON }}
           LINE_NAME: "Алматы"
-          CHECK_INTERVAL_SECONDS: "600"
-          ALERT_THRESHOLD_MINUTES: "10"
-          REMIND_EVERY_MINUTES: "30"
-          RUN_MINUTES: "345"
-        run: python monitor.py
+        run: |
+          MODE="${{ github.event.inputs.mode || 'status' }}"
+          python monitor.py "$MODE"
