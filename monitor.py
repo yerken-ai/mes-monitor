@@ -524,19 +524,42 @@ def main():
             browser.close()
 
 
-def refresh_only():
-    raw = load_raw_cookies()
-    ref = refresh_session(raw)
-    if not ref["jwt"]:
-        log("Не удалось продлить сессию — секрет не обновляем.")
-        return
-    with open(REFRESHED_FILE, "w", encoding="utf-8") as f:
-        json.dump(updated_raw_cookies(raw, ref), f, ensure_ascii=False)
-    log(f"Сохранено {REFRESHED_FILE}")
+def run_once_status():
+    log("Запуск однократной проверки статуса...")
+    state_path = prepare_state_file()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(storage_state=state_path, viewport={"width": 1920, "height": 1080}, locale="ru-RU")
+        page = context.new_page()
+        mon = Monitor(page)
+        try:
+            mon.open_almaty()
+            st = mon.detect_status()
+            log(f"Статус определен: {st}")
+            photo = mon.take_screenshot()
+            caption = status_caption(st, f"📊 <b>Линия {FACTORY_NAME}</b>")
+            send_photo(photo, caption)
+            log("Скриншот и статус успешно отправлены в Telegram.")
+        except PermissionError:
+            send_text("⚠️ <b>Сессия MES истекла.</b> Пожалуйста, обновите секрет AUTH_STATE_JSON.")
+            sys.exit(1)
+        except Exception as e:
+            log(f"Ошибка при получении статуса: {e}")
+            try:
+                page.screenshot(path=SCREENSHOT)
+                send_photo(SCREENSHOT, f"⚠️ Ошибка при открытии страницы: {e}")
+            except Exception:
+                send_text(f"⚠️ Ошибка: {e}")
+            sys.exit(1)
+        finally:
+            browser.close()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "refresh":
+    mode = sys.argv[1] if len(sys.argv) > 1 else "main"
+    if mode == "refresh":
         refresh_only()
+    elif mode in ("status", "once"):
+        run_once_status()
     else:
         main()
