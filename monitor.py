@@ -300,8 +300,19 @@ class Monitor:
     def open_almaty(self):
         """Открывает экран ВСЕ ЗАВОДЫ / АЛМАТЫ / ЛИНИИ ЗАВОДА и ждёт загрузки данных."""
         self.api_records = []
-        self.page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=90000)
-        self.page.wait_for_timeout(5000)
+        for attempt in range(1, 4):
+            try:
+                log(f"Загружаем {TARGET_URL} (попытка {attempt}/3)...")
+                self.page.goto(TARGET_URL, wait_until="commit", timeout=45000)
+                self.page.wait_for_load_state("domcontentloaded", timeout=45000)
+                break
+            except Exception as e:
+                log(f"Предупреждение при загрузке страницы: {e}")
+                if attempt == 3:
+                    raise
+                time.sleep(3)
+
+        self.page.wait_for_timeout(4000)
         if self.is_login_page():
             raise PermissionError("login")
 
