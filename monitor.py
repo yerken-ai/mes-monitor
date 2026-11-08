@@ -298,12 +298,17 @@ class Monitor:
         return self.page.get_by_text(re.compile(r"события\s+за\s+смену", re.I)).first
 
     def open_almaty(self):
-        """Открывает экран ВСЕ ЗАВОДЫ / АЛМАТЫ / ЛИНИИ ЗАВОДА и ждёт загрузки данных."""
+        """Открывает детальный экран мониторинга линии Алматы: ВСЕ ЗАВОДЫ / АЛМАТЫ / ЛИНИИ ЗАВОДА."""
         self.api_records = []
+        almaty_url = (
+            "https://tn-mes2.aspect-systems.ru/#/ibo/eba1ffb4-f2b1-451a-835e-446af19f93f8/gridView/"
+            "97c00ac7-f407-4150-8b3b-991bda19c595?"
+            "enterprise=1261cb69-ea71-402d-b8ca-817a9d0dcd77&workcenterId=c7d931c6-e645-46b0-941b-7fda5976b782"
+        )
         for attempt in range(1, 4):
             try:
-                log(f"Загружаем {TARGET_URL} (попытка {attempt}/3)...")
-                self.page.goto(TARGET_URL, wait_until="commit", timeout=45000)
+                log(f"Загружаем целевой экран Алматы (попытка {attempt}/3)...")
+                self.page.goto(almaty_url, wait_until="commit", timeout=45000)
                 self.page.wait_for_load_state("domcontentloaded", timeout=45000)
                 break
             except Exception as e:
@@ -316,65 +321,31 @@ class Monitor:
         if self.is_login_page():
             raise PermissionError("login")
 
-        log("Переходим на экран мониторинга заводов...")
+        # Дополнительно вызываем studio.gotoIbo на случай SPA роутинга
+        log("Применяем переход на экран линии Алматы через gotoIbo...")
         try:
             self.page.evaluate("""() => {
                 if (window.studio && window.studio.gotoIbo) {
                     window.studio.gotoIbo({
-                        iboId: '52273723-fd3f-4c30-83da-a0f2763522bc',
+                        iboId: 'eba1ffb4-f2b1-451a-835e-446af19f93f8',
+                        viewId: '97c00ac7-f407-4150-8b3b-991bda19c595',
                         mode: 'gridView',
-                        viewId: 'a26792f5-d534-4c6c-a647-f75d66fc0049',
-                        params: { workcenterId: '1261cb69-ea71-402d-b8ca-817a9d0dcd77' }
+                        params: {
+                            enterprise: '1261cb69-ea71-402d-b8ca-817a9d0dcd77',
+                            workcenterId: 'c7d931c6-e645-46b0-941b-7fda5976b782'
+                        }
                     });
                 }
             }""")
         except Exception as e:
-            log(f"JS gotoIbo ошибка: {e}")
+            log(f"gotoIbo исключение: {e}")
 
-        self.page.wait_for_timeout(4000)
-
-        # 1. Обязательно переключаем верхнюю кнопку на АЛМАТЫ
-        log("Ищем и нажимаем кнопку 'АЛМАТЫ' в верхней панели заводов...")
+        # Ожидаем появления хлебных крошек Алматы или таблицы событий
+        log("Ожидаем загрузки экрана 'АЛМАТЫ / ЛИНИИ ЗАВОДА'...")
         try:
-            self.page.evaluate("""() => {
-                const btns = Array.from(document.querySelectorAll('.aip-button-list button, button, .ant-btn'));
-                const btn = btns.find(b => (b.innerText || '').trim().toUpperCase() === 'АЛМАТЫ');
-                if (btn) btn.click();
-            }""")
-            self.page.wait_for_timeout(3000)
-        except Exception as e:
-            log(f"Поиск верхней кнопки 'АЛМАТЫ': {e}")
-
-        # 2. Нажимаем на зеленый блок '1 линия' слева для входа в детальный мониторинг линий
-        log("Нажимаем на блок '1 линия' слева для перехода в мониторинг...")
-        line_clicked = False
-        try:
-            line_loc = self.page.locator(".render-col:has-text('линия')").first
-            line_loc.wait_for(timeout=15000)
-            line_loc.click()
-            line_clicked = True
-            log("Кликнули на '1 линия' через locator.")
-        except Exception as e:
-            log(f"Клик через locator не удался: {e}")
-
-        if not line_clicked:
-            try:
-                self.page.evaluate("""() => {
-                    const els = Array.from(document.querySelectorAll('*'));
-                    const target = els.find(e => (e.innerText || '').includes('линия') && (e.innerText || '').includes('1'));
-                    if (target) target.click();
-                }""")
-                log("Кликнули на '1 линия' через JS evaluate.")
-            except Exception as e:
-                log(f"Клик через evaluate не удался: {e}")
-
-        # 3. Ожидаем появления детального экрана 'ЛИНИИ ЗАВОДА' / 'СОБЫТИЯ ЗА СМЕНУ'
-        log("Ожидаем отображения детального экрана 'ЛИНИИ ЗАВОДА'...")
-        try:
-            self.page.locator("text=СОБЫТИЯ ЗА СМЕНУ, text=ЛИНИИ ЗАВОДА").first.wait_for(timeout=30000)
-            log("Детальный экран успешно загружен!")
+            self.page.locator("text=АЛМАТЫ, text=СОБЫТИЯ ЗА СМЕНУ").first.wait_for(timeout=30000)
         except Exception:
-            log("Предупреждение: таймер ожидания элементов истек, продолжаем...")
+            pass
 
         # Даем 6 секунд дорисоваться всем таблицам, графикам и статусам
         self.page.wait_for_timeout(6000)
