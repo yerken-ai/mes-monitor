@@ -324,47 +324,48 @@ class Monitor:
 
         # 1. Обязательно переключаем верхнюю кнопку на АЛМАТЫ
         log("Ищем и нажимаем кнопку 'АЛМАТЫ' в верхней панели заводов...")
-        top_almaty = self.page.locator(".aip-button-list .ant-btn:has-text('АЛМАТЫ'), button:has-text('АЛМАТЫ'), .ant-btn:has-text('АЛМАТЫ')").first
-        try:
-            top_almaty.wait_for(timeout=15000)
-            top_almaty.click()
-            log("Нажали 'АЛМАТЫ' в верхней панели.")
-            self.page.wait_for_timeout(3000)
-        except Exception as e:
-            log(f"Поиск верхней кнопки 'АЛМАТЫ': {e}")
-            try:
-                self.page.evaluate("""() => {
-                    const btns = Array.from(document.querySelectorAll('.aip-button-list button, button, .ant-btn'));
-                    const btn = btns.find(b => (b.innerText || '').trim().toUpperCase() === 'АЛМАТЫ');
-                    if (btn) btn.click();
-                }""")
-            except Exception:
-                pass
-
-        # 2. Если мы на экране завода и виден зеленый блок '1 линия', нажимаем на него
-        log("Проверяем наличие блока '1 линия' для входа в мониторинг линий...")
-        try:
-            line_btn = self.page.locator(".render-col:has-text('линия'), div:has-text('линия')").first
-            if line_btn.is_visible():
-                log("Нажимаем на '1 линия'...")
-                line_btn.click()
-                self.page.wait_for_timeout(3000)
-        except Exception as e:
-            log(f"Клик по '1 линия': {e}")
-
-        # 3. Убеждаемся, что в верхней панели выбран именно АЛМАТЫ
         try:
             self.page.evaluate("""() => {
                 const btns = Array.from(document.querySelectorAll('.aip-button-list button, button, .ant-btn'));
                 const btn = btns.find(b => (b.innerText || '').trim().toUpperCase() === 'АЛМАТЫ');
                 if (btn) btn.click();
             }""")
-            self.page.wait_for_timeout(2000)
-        except Exception:
-            pass
+            self.page.wait_for_timeout(3000)
+        except Exception as e:
+            log(f"Поиск верхней кнопки 'АЛМАТЫ': {e}")
 
-        # Ожидаем отрисовки экрана линий завода Алматы
-        log("Ожидаем загрузки графиков и параметров линии Алматы...")
+        # 2. Нажимаем на зеленый блок '1 линия' слева для входа в детальный мониторинг линий
+        log("Нажимаем на блок '1 линия' слева для перехода в мониторинг...")
+        line_clicked = False
+        try:
+            line_loc = self.page.locator(".render-col:has-text('линия')").first
+            line_loc.wait_for(timeout=15000)
+            line_loc.click()
+            line_clicked = True
+            log("Кликнули на '1 линия' через locator.")
+        except Exception as e:
+            log(f"Клик через locator не удался: {e}")
+
+        if not line_clicked:
+            try:
+                self.page.evaluate("""() => {
+                    const els = Array.from(document.querySelectorAll('*'));
+                    const target = els.find(e => (e.innerText || '').includes('линия') && (e.innerText || '').includes('1'));
+                    if (target) target.click();
+                }""")
+                log("Кликнули на '1 линия' через JS evaluate.")
+            except Exception as e:
+                log(f"Клик через evaluate не удался: {e}")
+
+        # 3. Ожидаем появления детального экрана 'ЛИНИИ ЗАВОДА' / 'СОБЫТИЯ ЗА СМЕНУ'
+        log("Ожидаем отображения детального экрана 'ЛИНИИ ЗАВОДА'...")
+        try:
+            self.page.locator("text=СОБЫТИЯ ЗА СМЕНУ, text=ЛИНИИ ЗАВОДА").first.wait_for(timeout=30000)
+            log("Детальный экран успешно загружен!")
+        except Exception:
+            log("Предупреждение: таймер ожидания элементов истек, продолжаем...")
+
+        # Даем 6 секунд дорисоваться всем таблицам, графикам и статусам
         self.page.wait_for_timeout(6000)
 
     def take_screenshot(self) -> str:
