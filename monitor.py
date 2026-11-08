@@ -346,14 +346,33 @@ class Monitor:
             except Exception as e:
                 log(f"JS gotoIbo исключение: {e}")
 
-        # Ждем появления элементов страницы завода (хлебные крошки, события за смену или номер линии)
-        log("Ожидаем отображения экрана линий завода...")
+        # Ждем появления кнопки/блока линии (например '1 линия') на экране завода
+        log("Ожидаем появления блока '1 линия'...")
+        line_btn = self.page.locator(".render-col:has-text('линия'), text=линия, text=ЛИНИЯ").first
         try:
-            self.page.locator("text=ЛИНИИ ЗАВОДА, text=СОБЫТИЯ ЗА СМЕНУ, text=1 ЛИНИЯ, text=линия").first.wait_for(timeout=30000)
-        except Exception:
-            log("Предупреждение: таймер ожидания элементов истек, продолжаем...")
+            line_btn.wait_for(timeout=30000)
+            self.page.wait_for_timeout(2000)
+            log("Нажимаем на '1 линия' для входа в детальный мониторинг...")
+            line_btn.click()
+        except Exception as e:
+            log(f"Предупреждение при клике на '1 линия': {e}")
+            # Резервный клик через evaluate gotoIbo
+            try:
+                self.page.evaluate("""() => {
+                    const el = Array.from(document.querySelectorAll('*')).find(e => (e.innerText || '').trim() === '1\\nлиния' || (e.innerText || '').includes('линия'));
+                    if (el) el.click();
+                }""")
+            except Exception:
+                pass
 
-        # Даем дорисоваться графикам и таблицам
+        # Ждем загрузки детального мониторинга (хлебные крошки 'ЛИНИИ ЗАВОДА' или 'СОБЫТИЯ ЗА СМЕНУ')
+        log("Ожидаем отображения детального экрана 'ЛИНИИ ЗАВОДА' / 'СОБЫТИЯ ЗА СМЕНУ'...")
+        try:
+            self.page.locator("text=ЛИНИИ ЗАВОДА, text=СОБЫТИЯ ЗА СМЕНУ").first.wait_for(timeout=35000)
+        except Exception:
+            log("Предупреждение: таймер ожидания 'СОБЫТИЯ ЗА СМЕНУ' истек, продолжаем...")
+
+        # Даем 6 секунд дорисоваться всем таблицам, графикам и статусам
         self.page.wait_for_timeout(6000)
 
     def take_screenshot(self) -> str:
@@ -482,7 +501,7 @@ def main():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=state_path, viewport={"width": 1920, "height": 1080}, locale="ru-RU")
+        context = browser.new_context(storage_state=state_path, viewport={"width": 1920, "height": 1150}, locale="ru-RU")
         page = context.new_page()
         mon = Monitor(page)
 
@@ -567,7 +586,7 @@ def run_once_status():
     state_path = prepare_state_file()
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=state_path, viewport={"width": 1920, "height": 1080}, locale="ru-RU")
+        context = browser.new_context(storage_state=state_path, viewport={"width": 1920, "height": 1150}, locale="ru-RU")
         page = context.new_page()
         mon = Monitor(page)
         try:
