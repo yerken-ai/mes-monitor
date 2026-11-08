@@ -300,15 +300,10 @@ class Monitor:
     def open_almaty(self):
         """Открывает детальный экран мониторинга линии Алматы: ВСЕ ЗАВОДЫ / АЛМАТЫ / ЛИНИИ ЗАВОДА."""
         self.api_records = []
-        almaty_url = (
-            "https://tn-mes2.aspect-systems.ru/#/ibo/eba1ffb4-f2b1-451a-835e-446af19f93f8/gridView/"
-            "97c00ac7-f407-4150-8b3b-991bda19c595?"
-            "enterprise=1261cb69-ea71-402d-b8ca-817a9d0dcd77&workcenterId=c7d931c6-e645-46b0-941b-7fda5976b782"
-        )
         for attempt in range(1, 4):
             try:
-                log(f"Загружаем целевой экран Алматы (попытка {attempt}/3)...")
-                self.page.goto(almaty_url, wait_until="commit", timeout=45000)
+                log(f"Загружаем {TARGET_URL} (попытка {attempt}/3)...")
+                self.page.goto(TARGET_URL, wait_until="commit", timeout=45000)
                 self.page.wait_for_load_state("domcontentloaded", timeout=45000)
                 break
             except Exception as e:
@@ -317,37 +312,57 @@ class Monitor:
                     raise
                 time.sleep(3)
 
-        self.page.wait_for_timeout(4000)
+        self.page.wait_for_timeout(5000)
         if self.is_login_page():
             raise PermissionError("login")
 
-        # Дополнительно вызываем studio.gotoIbo на случай SPA роутинга
-        log("Применяем переход на экран линии Алматы через gotoIbo...")
+        # ШАГ 1: На стартовом экране нажимаем на карточку завода 'АЛМАТЫ'
+        log("Шаг 1: Ищем и нажимаем на карточку завода 'АЛМАТЫ'...")
+        almaty_card = self.page.locator(".render-col:has-text('АЛМАТЫ'), .ibo-card:has-text('АЛМАТЫ'), div:has-text('АЛМАТЫ')").filter(has_text="АЛМАТЫ").first
         try:
-            self.page.evaluate("""() => {
-                if (window.studio && window.studio.gotoIbo) {
-                    window.studio.gotoIbo({
-                        iboId: 'eba1ffb4-f2b1-451a-835e-446af19f93f8',
-                        viewId: '97c00ac7-f407-4150-8b3b-991bda19c595',
-                        mode: 'gridView',
-                        params: {
-                            enterprise: '1261cb69-ea71-402d-b8ca-817a9d0dcd77',
-                            workcenterId: 'c7d931c6-e645-46b0-941b-7fda5976b782'
-                        }
-                    });
-                }
-            }""")
+            almaty_card.wait_for(timeout=20000)
+            almaty_card.scroll_into_view_if_needed()
+            self.page.wait_for_timeout(1000)
+            almaty_card.click()
+            log("Кликнули на карточку 'АЛМАТЫ'.")
         except Exception as e:
-            log(f"gotoIbo исключение: {e}")
+            log(f"Locator клик по карточке 'АЛМАТЫ' не удался: {e}, пробуем JS...")
+            self.page.evaluate("""() => {
+                const els = Array.from(document.querySelectorAll('*'));
+                const card = els.find(e => (e.innerText || '').trim() === 'АЛМАТЫ' || (e.innerText || '').includes('АЛМАТЫ'));
+                if (card) card.click();
+            }""")
 
-        # Ожидаем появления хлебных крошек Алматы или таблицы событий
-        log("Ожидаем загрузки экрана 'АЛМАТЫ / ЛИНИИ ЗАВОДА'...")
+        # ШАГ 2: Ждем перехода на экран завода Алматы (где появляется зеленый блок '1 линия')
+        log("Шаг 2: Ожидаем экрана завода Алматы и блока '1 линия'...")
+        self.page.wait_for_timeout(4000)
+
+        # ШАГ 3: Нажимаем на зеленый блок '1 линия' слева
+        log("Шаг 3: Нажимаем на блок '1 линия'...")
         try:
-            self.page.locator("text=АЛМАТЫ, text=СОБЫТИЯ ЗА СМЕНУ").first.wait_for(timeout=30000)
-        except Exception:
-            pass
+            line_elem = self.page.get_by_text("линия", exact=False).first
+            line_elem.wait_for(timeout=25000)
+            line_elem.scroll_into_view_if_needed()
+            self.page.wait_for_timeout(1000)
+            line_elem.click()
+            log("Успешно кликнули на '1 линия'!")
+        except Exception as e:
+            log(f"Клик по '1 линия' через get_by_text: {e}, пробуем JS...")
+            self.page.evaluate("""() => {
+                const els = Array.from(document.querySelectorAll('*'));
+                const btn = els.find(e => (e.innerText || '').includes('линия'));
+                if (btn) btn.click();
+            }""")
 
-        # Даем 6 секунд дорисоваться всем таблицам, графикам и статусам
+        # ШАГ 4: Ждем отображения детального экрана 'ЛИНИИ ЗАВОДА' / 'СОБЫТИЯ ЗА СМЕНУ'
+        log("Шаг 4: Ожидаем загрузки детального экрана мониторинга линии...")
+        try:
+            self.page.locator("text=ЛИНИИ ЗАВОДА, text=СОБЫТИЯ ЗА СМЕНУ").first.wait_for(timeout=25000)
+            log("Экран 'ЛИНИИ ЗАВОДА' успешно загружен!")
+        except Exception:
+            log("Предупреждение: таймер ожидания экрана истек, делаем скриншот текущего состояния.")
+
+        # Даем 6 секунд дорисоваться всем таблицам и параметрам
         self.page.wait_for_timeout(6000)
 
     def take_screenshot(self) -> str:
