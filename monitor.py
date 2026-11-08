@@ -555,6 +555,17 @@ def run_once_status():
             browser.close()
 
 
+def refresh_only():
+    raw = load_raw_cookies()
+    ref = refresh_session(raw)
+    if not ref["jwt"]:
+        log("Не удалось продлить сессию — секрет не обновляем.")
+        return
+    with open(REFRESHED_FILE, "w", encoding="utf-8") as f:
+        json.dump(updated_raw_cookies(raw, ref), f, ensure_ascii=False)
+    log(f"Сохранено {REFRESHED_FILE}")
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "main"
     if mode == "refresh":
