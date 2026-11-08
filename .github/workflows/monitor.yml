@@ -1,13 +1,12 @@
 name: MES Almaty Line Monitor
 
 on:
-  # Автозапуск каждый час (внутри одного запуска вкладка браузера остается открытой 55 минут и обновляется каждые 5 минут!)
+  # Запуск каждый час. Один запуск работает ~5ч45м; благодаря concurrency
+  # следующий запуск стоит в очереди и стартует сразу после окончания предыдущего.
   schedule:
-    - cron: '*/5 * * * *'
-  # Возможность запустить вручную кнопкой "Run workflow" в GitHub
+    - cron: '0 * * * *'
   workflow_dispatch:
 
-# Гарантирует, что одновременно работает только 1 браузер (чтобы не дублировать сообщения и не сбить сессию)
 concurrency:
   group: mes-almaty-monitor
   cancel-in-progress: false
@@ -15,7 +14,9 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 65
+    timeout-minutes: 355
+    env:
+      GH_PAT: ${{ secrets.GH_PAT }}
 
     steps:
       - name: Checkout repository
@@ -32,12 +33,27 @@ jobs:
           pip install -r requirements.txt
           playwright install --with-deps chromium
 
-      - name: Run monitor loop (every 5 minutes for 55 minutes)
+      # Продление сессии MES и сохранение новых куки в секрет (если задан GH_PAT)
+      - name: Refresh MES session cookies
+        if: env.GH_PAT != ''
+        env:
+          AUTH_STATE_JSON: ${{ secrets.AUTH_STATE_JSON }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          python monitor.py refresh
+          if [ -f refreshed_auth.json ]; then
+            gh secret set AUTH_STATE_JSON -R "${{ github.repository }}" < refreshed_auth.json
+            rm -f refreshed_auth.json
+          fi
+
+      - name: Run monitor (check every 10 min + Telegram bot)
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           AUTH_STATE_JSON: ${{ secrets.AUTH_STATE_JSON }}
           LINE_NAME: "Алматы"
-          LOOP_COUNT: "11"
-          INTERVAL_SECONDS: "300"
+          CHECK_INTERVAL_SECONDS: "600"
+          ALERT_THRESHOLD_MINUTES: "10"
+          REMIND_EVERY_MINUTES: "30"
+          RUN_MINUTES: "345"
         run: python monitor.py
