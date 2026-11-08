@@ -1,0 +1,43 @@
+name: MES Almaty Line Monitor
+
+on:
+  # Автозапуск каждый час (внутри одного запуска вкладка браузера остается открытой 55 минут и обновляется каждые 5 минут!)
+  schedule:
+    - cron: '*/5 * * * *'
+  # Возможность запустить вручную кнопкой "Run workflow" в GitHub
+  workflow_dispatch:
+
+# Гарантирует, что одновременно работает только 1 браузер (чтобы не дублировать сообщения и не сбить сессию)
+concurrency:
+  group: mes-almaty-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Run monitor loop (every 5 minutes for 55 minutes)
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          AUTH_STATE_JSON: ${{ secrets.AUTH_STATE_JSON }}
+          LINE_NAME: "Алматы"
+          LOOP_COUNT: "11"
+          INTERVAL_SECONDS: "300"
+        run: python monitor.py
