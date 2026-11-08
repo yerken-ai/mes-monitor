@@ -301,21 +301,59 @@ class Monitor:
         """Открывает экран ВСЕ ЗАВОДЫ / АЛМАТЫ / ЛИНИИ ЗАВОДА и ждёт загрузки данных."""
         self.api_records = []
         self.page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=90000)
-        self.page.wait_for_timeout(4000)
+        self.page.wait_for_timeout(5000)
         if self.is_login_page():
             raise PermissionError("login")
 
-        card = self.page.get_by_text(re.compile(rf"^\s*{FACTORY_NAME}\s*$", re.I)).first
-        card.wait_for(timeout=60000)
-        self.page.wait_for_timeout(1500)
-        card.click()
+        # Ищем карточку завода 'Алматы' или кнопку в верхнем меню
+        log(f"Ищем переход на завод '{FACTORY_NAME}'...")
+        almaty_clicked = False
+
+        # 1. Пробуем кликнуть по карточке или кнопке Алматы
+        selectors = [
+            f".render-col:has-text('{FACTORY_NAME}')",
+            f".ibo-card:has-text('{FACTORY_NAME}')",
+            f"button:has-text('{FACTORY_NAME}')",
+            f".ant-btn:has-text('{FACTORY_NAME}')",
+            f"[role='button']:has-text('{FACTORY_NAME}')",
+            f"text={FACTORY_NAME}",
+        ]
+        for sel in selectors:
+            loc = self.page.locator(sel)
+            if loc.count() > 0:
+                try:
+                    log(f"Кликаем по селектору: {sel}")
+                    loc.first.click(timeout=10000)
+                    almaty_clicked = True
+                    break
+                except Exception as e:
+                    log(f"Не удалось кликнуть по {sel}: {e}")
+
+        # 2. Если клик через селекторы не сработал, вызываем прямой JS gotoIbo
+        if not almaty_clicked or self.page.url == TARGET_URL:
+            try:
+                log("Пробуем переход через JS gotoIbo...")
+                self.page.evaluate("""() => {
+                    if (window.studio && window.studio.gotoIbo) {
+                        window.studio.gotoIbo({
+                            iboId: '52273723-fd3f-4c30-83da-a0f2763522bc',
+                            mode: 'gridView',
+                            viewId: 'a26792f5-d534-4c6c-a647-f75d66fc0049',
+                            params: { workcenterId: '1261cb69-ea71-402d-b8ca-817a9d0dcd77' }
+                        });
+                    }
+                }""")
+            except Exception as e:
+                log(f"JS gotoIbo исключение: {e}")
+
+        # Ждем появления элементов страницы завода (хлебные крошки, события за смену или номер линии)
+        log("Ожидаем отображения экрана линий завода...")
         try:
-            self.events_header().wait_for(timeout=60000)
+            self.page.locator("text=ЛИНИИ ЗАВОДА, text=СОБЫТИЯ ЗА СМЕНУ, text=1 ЛИНИЯ, text=линия").first.wait_for(timeout=30000)
         except Exception:
-            log("Не дождались 'События за смену' — пробуем ещё раз кликнуть по заводу.")
-            self.page.get_by_text(re.compile(rf"^\s*{FACTORY_NAME}\s*$", re.I)).first.click()
-            self.events_header().wait_for(timeout=60000)
-        # даём дорисоваться таблицам и графикам
+            log("Предупреждение: таймер ожидания элементов истек, продолжаем...")
+
+        # Даем дорисоваться графикам и таблицам
         self.page.wait_for_timeout(6000)
 
     def take_screenshot(self) -> str:
