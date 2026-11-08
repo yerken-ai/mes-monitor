@@ -348,27 +348,27 @@ class Monitor:
 
         # Ждем появления кнопки/блока линии (например '1 линия') на экране завода
         log("Ожидаем появления блока '1 линия'...")
-        line_btn = self.page.locator(".render-col:has-text('линия'), text=линия, text=ЛИНИЯ").first
         try:
-            line_btn.wait_for(timeout=30000)
+            line_btn = self.page.get_by_text("линия", exact=False).first
+            line_btn.wait_for(timeout=20000)
             self.page.wait_for_timeout(2000)
             log("Нажимаем на '1 линия' для входа в детальный мониторинг...")
             line_btn.click()
         except Exception as e:
             log(f"Предупреждение при клике на '1 линия': {e}")
-            # Резервный клик через evaluate gotoIbo
             try:
                 self.page.evaluate("""() => {
-                    const el = Array.from(document.querySelectorAll('*')).find(e => (e.innerText || '').trim() === '1\\nлиния' || (e.innerText || '').includes('линия'));
+                    const targets = Array.from(document.querySelectorAll('*'));
+                    const el = targets.find(e => (e.innerText || '').toLowerCase().includes('линия'));
                     if (el) el.click();
                 }""")
-            except Exception:
-                pass
+            except Exception as js_err:
+                log(f"JS клик ошибка: {js_err}")
 
         # Ждем загрузки детального мониторинга (хлебные крошки 'ЛИНИИ ЗАВОДА' или 'СОБЫТИЯ ЗА СМЕНУ')
         log("Ожидаем отображения детального экрана 'ЛИНИИ ЗАВОДА' / 'СОБЫТИЯ ЗА СМЕНУ'...")
         try:
-            self.page.locator("text=ЛИНИИ ЗАВОДА, text=СОБЫТИЯ ЗА СМЕНУ").first.wait_for(timeout=35000)
+            self.page.locator(".render-col:has-text('СОБЫТИЯ ЗА СМЕНУ'), div:has-text('СОБЫТИЯ ЗА СМЕНУ')").first.wait_for(timeout=35000)
         except Exception:
             log("Предупреждение: таймер ожидания 'СОБЫТИЯ ЗА СМЕНУ' истек, продолжаем...")
 
