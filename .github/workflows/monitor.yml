@@ -1,4 +1,4 @@
-name: MES Almaty Line Status
+name: MES Almaty Telegram Bot
 
 on:
   workflow_dispatch:
@@ -6,24 +6,27 @@ on:
       mode:
         description: 'Режим работы'
         required: false
-        default: 'status'
+        default: 'bot'
         type: choice
         options:
-          - status
-          - daemon
-  repository_dispatch:
-    types: [status, check]
+          - bot
+          - once
+  schedule:
+    # Перезапуск каждые 5 часов для непрерывной автономной работы 24/7
+    - cron: '0 */5 * * *'
 
 concurrency:
-  group: mes-almaty-monitor
+  group: mes-almaty-bot
   cancel-in-progress: true
 
+permissions:
+  contents: write
+  actions: write
+
 jobs:
-  check-status:
+  run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      GH_PAT: ${{ secrets.GH_PAT }}
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repository
@@ -40,25 +43,32 @@ jobs:
           pip install -r requirements.txt
           playwright install --with-deps chromium
 
-      # Автоматическое продление токена сессии MES (сохраняет в secret AUTH_STATE_JSON)
-      - name: Refresh MES session cookies
-        if: env.GH_PAT != ''
-        env:
-          AUTH_STATE_JSON: ${{ secrets.AUTH_STATE_JSON }}
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          python monitor.py refresh
-          if [ -f refreshed_auth.json ]; then
-            gh secret set AUTH_STATE_JSON -R "${{ github.repository }}" < refreshed_auth.json
-            rm -f refreshed_auth.json
-          fi
-
-      - name: Fetch Almaty status and send screenshot
+      - name: Run Telegram Bot
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           AUTH_STATE_JSON: ${{ secrets.AUTH_STATE_JSON }}
-          LINE_NAME: "Алматы"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_MINUTES: '330'
         run: |
-          MODE="${{ github.event.inputs.mode || 'status' }}"
+          MODE="${{ github.event.inputs.mode || 'bot' }}"
+          echo "Запуск в режиме: $MODE"
           python monitor.py "$MODE"
+
+          # Если работали в режиме постоянного бота, запускаем следующий сеанс
+          if [ "$MODE" = "bot" ]; then
+            echo "Сеанс завершен, запускаем следующий рабочий цикл..."
+            gh workflow run monitor.yml -R "${{ github.repository }}" || true
+          fi
+
+      # Если при работе был обновлен токен сессии MES и задан GH_PAT, обновляем секрет
+      - name: Update secret AUTH_STATE_JSON if refreshed
+        if: always() && env.GH_PAT != ''
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -f refreshed_auth.json ]; then
+            gh secret set AUTH_STATE_JSON -R "${{ github.repository }}" < refreshed_auth.json
+            echo "Секрет AUTH_STATE_JSON успешно обновлен."
+          fi
