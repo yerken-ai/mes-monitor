@@ -275,12 +275,16 @@ class MesNavigator:
 
         # Шаг 1: Нажимаем на карточку Алматы на главной странице
         log("Шаг 1: Нажимаем на карточку Алматы...")
-        almaty_target = self.page.locator("text=ТЕХНОВЕНТ СТАНДАРТ").first
-        if almaty_target.count() == 0:
-            almaty_target = self.page.get_by_text("ТЕХНОВЕНТ").first
-        if almaty_target.count() > 0:
-            almaty_target.click()
-        else:
+        clicked_almaty = False
+        for el in self.page.locator("text=АЛМАТЫ").all():
+            box = el.bounding_box()
+            if box and box["y"] > 200:
+                el.click()
+                clicked_almaty = True
+                log(f"Кликнули по карточке Алматы: {box}")
+                break
+
+        if not clicked_almaty:
             self.page.locator("text=АЛМАТЫ").first.click()
 
         # Ждем загрузки экрана ВСЕ ЗАВОДЫ / АЛМАТЫ
@@ -318,13 +322,28 @@ class MesNavigator:
         self.page.wait_for_timeout(5000)
 
     def take_screenshot(self) -> str:
-        # Устанавливаем оптимальный зум 85%, чтобы в кадр целиком вошли
-        # и верхние технологические блоки, и нижняя таблица 'СОБЫТИЯ ЗА СМЕНУ'
+        # Устанавливаем масштаб 75% и динамически рассчитываем высоту экрана,
+        # чтобы в скриншот ВСЕГДА целиком помещались абсолютно ВСЕ строки таблицы 'СОБЫТИЯ ЗА СМЕНУ'
         try:
-            self.page.evaluate("document.body.style.zoom = '0.85'")
-            self.page.wait_for_timeout(1000)
-        except Exception:
-            pass
+            zoom = 0.75
+            self.page.evaluate(f"document.body.style.zoom = '{zoom}'")
+            self.page.wait_for_timeout(800)
+
+            needed_height = self.page.evaluate("""() => {
+                const rows = document.querySelectorAll('.ant-table-tbody tr, table tbody tr, [role="row"]');
+                let bottom = 1100;
+                for (const r of rows) {
+                    const rect = r.getBoundingClientRect();
+                    if (rect.bottom > bottom) bottom = rect.bottom;
+                }
+                return Math.ceil(bottom + 50);
+            }""")
+
+            target_height = max(1150, min(2500, int(needed_height)))
+            self.page.set_viewport_size({"width": 1920, "height": target_height})
+            self.page.wait_for_timeout(800)
+        except Exception as e:
+            log(f"Ошибка при настройке высоты скриншота: {e}")
 
         self.page.screenshot(path=SCREENSHOT, full_page=False)
         return SCREENSHOT
