@@ -350,27 +350,57 @@ class MesNavigator:
 
 
 # ----------------------------------------------------------------- Обработка запроса фото
-def capture_and_send_status(page: MesNavigator, chat_id: str):
+def capture_and_send_status(navigator: MesNavigator, chat_id: str):
     log(f"Формирование фото статуса для chat_id={chat_id}...")
     send_chat_action("upload_photo", chat_id)
     send_text("⏳ Получаю свежий скриншот экрана линии, подождите немного...", chat_id)
 
     try:
-        page.open_almaty()
-        photo_path = page.take_screenshot()
+        navigator.open_almaty()
+        photo_path = navigator.take_screenshot()
         caption = f"📊 <b>Линия {FACTORY_NAME}</b>\n🕒 <i>{now_local():%d.%m.%Y %H:%M:%S}</i>"
         send_photo(photo_path, caption, chat_id=chat_id, reply_markup=get_status_keyboard())
         log("Скриншот успешно отправлен!")
     except PermissionError:
-        send_text("⚠️ <b>Сессия MES истекла.</b> Необходимо обновить токен (AUTH_STATE_JSON).", chat_id)
-        raise
+        send_text("⚠️ <b>Сессия MES истекла.</b> Требуется обновить cookies в файле auth_state.json.", chat_id)
+        log("Ошибка: сессия MES истекла.")
     except Exception as e:
         log(f"Ошибка получения скриншота: {e}")
         try:
-            page.page.screenshot(path=SCREENSHOT)
+            navigator.page.screenshot(path=SCREENSHOT)
             send_photo(SCREENSHOT, f"⚠️ Не удалось полностью открыть экран линии:\n<code>{e}</code>", chat_id=chat_id)
         except Exception:
             send_text(f"⚠️ Ошибка: {e}", chat_id)
+
+
+def execute_status_request(chat_id: str):
+    """Выполняет запрос в изолированном контексте с автопродлением сессии."""
+    try:
+        state_path = prepare_state_file()
+    except Exception as e:
+        log(f"Ошибка подготовки сессии: {e}")
+        send_text(f"⚠️ Ошибка сессии: {e}", chat_id)
+        return
+
+    with sync_playwright() as p:
+        browser = get_browser(p)
+        try:
+            context = browser.new_context(
+                storage_state=state_path,
+                viewport={"width": 1920, "height": 1150},
+                locale="ru-RU",
+                ignore_https_errors=True
+            )
+            page = context.new_page()
+            navigator = MesNavigator(page)
+            capture_and_send_status(navigator, chat_id)
+        except Exception as e:
+            log(f"Ошибка в execute_status_request: {e}")
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
 
 
 # ----------------------------------------------------------------- Основной цикл бота
@@ -406,105 +436,80 @@ def run_bot():
     log("Запуск бота мониторинга линии (ответ ТОЛЬКО по команде /status)...")
     log("=" * 60)
 
-    state_path = prepare_state_file()
     deadline = time.time() + RUN_MINUTES * 60
     offset = None
-    pending_recent = []
 
+    # Проверяем недавние сообщения за последние 15 минут
     init_res = tg("getUpdates", data={"timeout": 0, "allowed_updates": json.dumps(["message"])})
+    pending_recent = []
     if init_res and init_res.get("ok") and init_res.get("result"):
         for upd in init_res["result"]:
             offset = upd["update_id"] + 1
             msg = upd.get("message") or {}
-            # Если команда пришла недавно (за последние 20 минут) — отвечаем на нее
-            if time.time() - msg.get("date", 0) <= 1200:
+            if time.time() - msg.get("date", 0) <= 900:
                 pending_recent.append(upd)
         log(f"Найдено {len(pending_recent)} недавних сообщений для обработки.")
 
-    with sync_playwright() as p:
-        browser = get_browser(p)
-        context = browser.new_context(
-            storage_state=state_path,
-            viewport={"width": 1920, "height": 1150},
-            locale="ru-RU",
-            ignore_https_errors=True
-        )
-        page = context.new_page()
-        navigator = MesNavigator(page)
+    for update in pending_recent:
+        msg = update.get("message") or {}
+        chat_id = str((msg.get("chat") or {}).get("id", ""))
+        text = msg.get("text") or ""
+        if not TG_CHAT_ID or chat_id == TG_CHAT_ID:
+            if is_status_command(text):
+                log(f"Обработка недавней команды /status от {chat_id}")
+                execute_status_request(chat_id)
+            elif is_start_command(text):
+                send_text(
+                    f"👋 Здравствуйте!\n\nЯ бот мониторинга завода <b>{FACTORY_NAME}</b>.\n"
+                    f"Нажмите кнопку ниже или отправьте команду <b>/status</b>, чтобы получить скриншот.",
+                    chat_id=chat_id,
+                    reply_markup=get_status_keyboard()
+                )
 
-        # Обрабатываем недавние команды, присланные до старта
-        for update in pending_recent:
-            msg = update.get("message") or {}
-            chat_id = str((msg.get("chat") or {}).get("id", ""))
-            text = msg.get("text") or ""
-            if not TG_CHAT_ID or chat_id == TG_CHAT_ID:
-                if is_status_command(text):
-                    log(f"Обработка недавней команды /status от {chat_id}")
-                    capture_and_send_status(navigator, chat_id)
-                elif is_start_command(text):
-                    send_text(
-                        f"👋 Здравствуйте!\n\nЯ бот мониторинга завода <b>{FACTORY_NAME}</b>.\n"
-                        f"Нажмите кнопку ниже или отправьте команду <b>/status</b>, чтобы получить скриншот.",
-                        chat_id=chat_id,
-                        reply_markup=get_status_keyboard()
-                    )
-
-        last_refresh_time = time.time()
-
+    # Основной цикл long-polling (никогда не падает)
+    while time.time() < deadline:
         try:
-            while time.time() < deadline:
-                # Каждые 2 часа фоново продлеваем токен сессии
-                if time.time() - last_refresh_time > 7200:
-                    try:
-                        raw = load_raw_cookies()
-                        ref = refresh_session(raw)
-                        last_refresh_time = time.time()
-                    except Exception as e:
-                        log(f"Фоновое продление токена: {e}")
+            remaining = max(1, min(25, int(deadline - time.time())))
+            payload = {"timeout": remaining, "allowed_updates": json.dumps(["message"])}
+            if offset is not None:
+                payload["offset"] = offset
 
-                # Long polling Telegram
-                remaining = max(1, min(25, int(deadline - time.time())))
-                payload = {"timeout": remaining, "allowed_updates": json.dumps(["message"])}
-                if offset is not None:
-                    payload["offset"] = offset
+            res = tg("getUpdates", data=payload, _timeout=remaining + 15)
+            if not res or not res.get("ok"):
+                time.sleep(2)
+                continue
 
-                res = tg("getUpdates", data=payload, _timeout=remaining + 15)
-                if not res or not res.get("ok"):
-                    time.sleep(2)
+            for update in res.get("result", []):
+                offset = update["update_id"] + 1
+                msg = update.get("message") or {}
+                chat_id = str((msg.get("chat") or {}).get("id", ""))
+                text = msg.get("text") or ""
+
+                if TG_CHAT_ID and chat_id != TG_CHAT_ID:
+                    log(f"Игнорируем сообщение от неизвестного чата {chat_id}")
                     continue
 
-                for update in res.get("result", []):
-                    offset = update["update_id"] + 1
-                    msg = update.get("message") or {}
-                    chat_id = str((msg.get("chat") or {}).get("id", ""))
-                    text = msg.get("text") or ""
+                if is_start_command(text):
+                    log(f"Получена команда /start от {chat_id}")
+                    welcome = (
+                        f"👋 Здравствуйте!\n\n"
+                        f"Я бот мониторинга завода <b>{FACTORY_NAME}</b>.\n"
+                        f"Нажмите кнопку ниже или отправьте команду <b>/status</b>, "
+                        f"чтобы получить свежий скриншот экрана линии."
+                    )
+                    send_text(welcome, chat_id=chat_id, reply_markup=get_status_keyboard())
 
-                    # Проверка авторизованного пользователя (если задан TG_CHAT_ID)
-                    if TG_CHAT_ID and chat_id != TG_CHAT_ID:
-                        log(f"Игнорируем сообщение от неизвестного чата {chat_id}")
-                        continue
+                elif is_status_command(text):
+                    log(f"Получена команда /status от {chat_id}")
+                    execute_status_request(chat_id)
 
-                    if is_start_command(text):
-                        log(f"Получена команда /start от {chat_id}")
-                        welcome = (
-                            f"👋 Здравствуйте!\n\n"
-                            f"Я бот мониторинга завода <b>{FACTORY_NAME}</b>.\n"
-                            f"Нажмите кнопку ниже или отправьте команду <b>/status</b>, "
-                            f"чтобы получить свежий скриншот экрана линии."
-                        )
-                        send_text(welcome, chat_id=chat_id, reply_markup=get_status_keyboard())
+        except Exception as e:
+            log(f"Ошибка в цикле бота: {e}")
+            time.sleep(3)
 
-                    elif is_status_command(text):
-                        log(f"Получена команда /status от {chat_id}")
-                        capture_and_send_status(navigator, chat_id)
-
-        except PermissionError:
-            log("Критическая ошибка: сессия истекла.")
-            sys.exit(1)
-        finally:
-            if offset is not None:
-                tg("getUpdates", data={"offset": offset, "timeout": 0})
-            browser.close()
+    if offset is not None:
+        tg("getUpdates", data={"offset": offset, "timeout": 0})
+    log("Сеанс бота завершен.")
 
 
 def run_once():
